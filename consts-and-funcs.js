@@ -1,16 +1,20 @@
 const https = require('https')
 const fs = require('fs')
+const SEP = require('path').sep
+const PLATFORM = require('os').platform()
+const rl = require('readline').createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    completer,
+})
 
-const SETTINGS_FILE_NAME = 'settings.ini', DNL_SITE_KEY = 'dnl_site', BATCH_SIZE_KEY = 'batch_size', DIR_KEY = 'dir',
-    FIXES_ENABLE_KEY = 'fixes_enable'
+const DNL_SITE_KEY = 'dnl_site', BATCH_SIZE_KEY = 'batch_size', DIR_KEY = 'dir', FIXES_ENABLE_KEY = 'fixes_enable'
 
 function go(settingsToUse, stats) {
     console.time('...done')
     console.log('started...')
-    if (fs.existsSync(settingsToUse[DIR_KEY].v)) {
-        fs.rmSync(settingsToUse[DIR_KEY].v, {recursive: true})
-    }
-    fs.mkdirSync(settingsToUse[DIR_KEY].v, {recursive: true})
+    rmDirIfExistsSync(settingsToUse[DIR_KEY].v)
+    fs.mkdirSync(settingsToUse[DIR_KEY].v)
     https.get(settingsToUse[DNL_SITE_KEY].v, res => {
         let a = ''
 
@@ -43,22 +47,27 @@ function go(settingsToUse, stats) {
 function modify(a) {
     const l = a.length
     a = a.replace('ping-restart 0', '#ping-restart 0')
-        .replace('fast-io', '#fast-io')
         .replace('cipher AES-256-CBC', '#cipher AES-256-CBC\ndata-ciphers-fallback AES-256-CBC')
         .replace('auth SHA512', 'auth SHA512\nblock-outside-dns\nauth-nocache')
+    if (PLATFORM !== 'linux') {
+        a = a.replace('fast-io', '#fast-io')
+    }
     if (l !== a.length) {
         return a
     }
-    throw Error('file content n/g\n' + a + '\n-----')
+    throw Error('file content n/g:\n' + a + '\n-----')
 }
 
 function parseSettings(fileData) {
     const settingsMap = {}
+    const settingsKeys = [DNL_SITE_KEY, BATCH_SIZE_KEY, DIR_KEY, FIXES_ENABLE_KEY]
 
-    fileData.split(fileData.includes('\r\n') ? '\r\n' : fileData.includes('\n') ? '\n' : '\r').forEach(it => {
-        const split = it.split('=')
-        settingsMap[split[0].toLowerCase()] = split[1]
-    })
+    fileData.split(fileData.includes('\r\n') ? '\r\n' : fileData.includes('\n') ? '\n' : '\r').map(it => it.split('='))
+        .filter(it => it.length === 2)
+        .map(it => [it[0].trim().toLowerCase(), it[1].trim()])
+        .filter(it => it[1].length)
+        .filter(it => settingsKeys.includes(it[0]))
+        .forEach(it => settingsMap[it[0]] = it[1])
     return settingsMap
 }
 
@@ -85,10 +94,57 @@ function downloadOvpnFile(url, file, settingsToUse, stats) {
 }
 
 function closeRemoveAndRejectWithMessage(writeStream, file, msg, url, rejectFn, stats) {
-    writeStream.close(() => fs.rm(file, () => {
+    writeStream.close(() => fs.unlink(file, () => {
         stats.total++
         rejectFn(++stats.failed + `, error in https.get(${url}): ` + msg)
     }))
 }
 
-module.exports = {SETTINGS_FILE_NAME, DNL_SITE_KEY, BATCH_SIZE_KEY, DIR_KEY, FIXES_ENABLE_KEY, go, parseSettings}
+function question(settingEntry, it, settingsToUse, stats) {
+    if (settingEntry.done) {
+        rl.close()
+        go(settingsToUse, stats)
+        return
+    }
+    rl.question(`${settingEntry.value[1].message} [\x1b[1;33m${settingEntry.value[1].v}\x1b[0m] `, answer => {
+        if (answer) {
+            try {
+                settingsToUse[settingEntry.value[0]].v = settingsToUse[settingEntry.value[0]].f(answer)
+            } catch (e) {
+                question(settingEntry, it, settingsToUse, stats)
+                return
+            }
+        }
+        question(it.next(), it, settingsToUse, stats)
+    })
+}
+
+function rmDirIfExistsSync(pathSepEnded) {
+    if (fs.existsSync(pathSepEnded)) {
+        fs.readdirSync(pathSepEnded).forEach(fileName => {
+            fileName = pathSepEnded + fileName
+            if (fs.statSync(fileName).isDirectory()) {
+                rmDirIfExistsSync(fileName + SEP)
+                return
+            }
+            fs.unlinkSync(fileName)
+        })
+        fs.rmdirSync(pathSepEnded)
+    }
+}
+
+function completer(line) {
+    const lineLC = line.toLowerCase()
+    const hits = ['true', 'false'].filter(c => line.length && c.startsWith(lineLC))
+    if (lineLC === 'y' || lineLC === '1') {
+        hits.push('true')
+    } else if (lineLC === 'n' || lineLC === '0') {
+        hits.push('false')
+    }
+    if (hits.length) {
+        rl.line = line.toLowerCase()
+    }
+    return [hits, line]
+}
+
+module.exports = {DNL_SITE_KEY, BATCH_SIZE_KEY, DIR_KEY, FIXES_ENABLE_KEY, parseSettings, question}
