@@ -2,11 +2,7 @@ const https = require('https')
 const fs = require('fs')
 const SEP = require('path').sep
 const PLATFORM = require('os').platform()
-const rl = require('readline').createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    completer,
-})
+const rl = require('readline').createInterface({input: process.stdin, output: process.stdout, completer})
 
 const DNL_SITE_KEY = 'dnl_site', BATCH_SIZE_KEY = 'batch_size', DIR_KEY = 'dir', FIXES_ENABLE_KEY = 'fixes_enable'
 
@@ -14,34 +10,41 @@ function go(settingsToUse, stats) {
     console.time('...done')
     console.log('started...')
     rmDirIfExistsSync(settingsToUse[DIR_KEY].v)
-    fs.mkdirSync(settingsToUse[DIR_KEY].v)
-    https.get(settingsToUse[DNL_SITE_KEY].v, res => {
-        let a = ''
+    mkDirRecursiveSync(settingsToUse[DIR_KEY].v)
+    try {
+        https.get(settingsToUse[DNL_SITE_KEY].v, res => {
+            let a = ''
 
-        res.on('data', data => a += data)
-        res.on('end', async () => {
-            const urls = a.match(/https:\/\/.+udp.+\.ovpn/g), urlsParts = []
-            let i, u
+            res.on('data', data => a += data)
+            res.on('end', async () => {
+                const urls = a.match(/https:\/\/.+udp.+\.ovpn/g)
+                if (urls) {
+                    const urlsParts = []
+                    let i, u
 
-            for (i = 0; (u = i + settingsToUse[BATCH_SIZE_KEY].v) < urls.length; i += settingsToUse[BATCH_SIZE_KEY].v) {
-                urlsParts.push(urls.slice(i, u))
-            }
-            urlsParts.push(urls.slice(i))
-            for (const urlsPart of urlsParts) {
-                await Promise.all(urlsPart.map(async it => {
-                    const strings = it.split('/')
-                    try {
-                        await downloadOvpnFile(it, settingsToUse[DIR_KEY].v + strings[strings.length - 1], settingsToUse, stats)
-                    } catch (e) {
-                        console.error(e)
+                    for (i = 0; (u = i + settingsToUse[BATCH_SIZE_KEY].v) < urls.length; i += settingsToUse[BATCH_SIZE_KEY].v) {
+                        urlsParts.push(urls.slice(i, u))
                     }
-                }))
-                console.log('batch', settingsToUse[BATCH_SIZE_KEY].v)
-            }
-            console.timeEnd('...done')
-            console.log(`ok: ${stats.success}, err: ${stats.failed}, total: ${stats.total}`)
-        })
-    }).on('error', err => console.error('access to vpn site error', err))
+                    urlsParts.push(urls.slice(i))
+                    for (const urlsPart of urlsParts) {
+                        await Promise.all(urlsPart.map(async it => {
+                            const strings = it.split('/')
+                            try {
+                                await downloadOvpnFile(it, settingsToUse[DIR_KEY].v, strings[strings.length - 1], settingsToUse, stats)
+                            } catch (e) {
+                                console.error(e)
+                            }
+                        }))
+                        console.log('batch\x1b[1;32m', settingsToUse[BATCH_SIZE_KEY].v + '\x1b[0m')
+                    }
+                }
+                console.timeEnd('...done')
+                console.log(`ok: \x1b[1;32m${stats.success}\x1b[0m, err: \x1b[1;33m${stats.failed}\x1b[0m, total: ${stats.total}`)
+            })
+        }).on('error', e => console.error('access to vpn site error:', e.message))
+    } catch (e) {
+        console.error('an error occurred:', e.message)
+    }
 }
 
 function modify(a) {
@@ -55,7 +58,7 @@ function modify(a) {
     if (l !== a.length) {
         return a
     }
-    throw Error('file content n/g:\n' + a + '\n-----')
+    throw Error('file content n/g:\n' + a + '\n----- EOF -----')
 }
 
 function parseSettings(fileData) {
@@ -71,9 +74,23 @@ function parseSettings(fileData) {
     return settingsMap
 }
 
-function downloadOvpnFile(url, file, settingsToUse, stats) {
+function appendCountryFolder(path, fileName) {
+    const country = fileName.match(/^\D+/g)[0]
+    const split = country.split('-')
+    if (!fs.existsSync(path += split[0])) {
+        fs.mkdirSync(path)
+    }
+    if (split[1]) {
+        if (!fs.existsSync(path += SEP + country)) {
+            fs.mkdirSync(path)
+        }
+    }
+    return path + SEP + fileName
+}
+
+function downloadOvpnFile(url, path, file, settingsToUse, stats) {
     return new Promise((resolve, reject) => {
-        const writeStream = fs.createWriteStream(file)
+        const writeStream = fs.createWriteStream(file = appendCountryFolder(path, file))
         https.get(url, res => {
             let a = ''
 
@@ -96,7 +113,7 @@ function downloadOvpnFile(url, file, settingsToUse, stats) {
 function closeRemoveAndRejectWithMessage(writeStream, file, msg, url, rejectFn, stats) {
     writeStream.close(() => fs.unlink(file, () => {
         stats.total++
-        rejectFn(++stats.failed + `, error in https.get(${url}): ` + msg)
+        rejectFn(`error (\x1b[1;33m${++stats.failed}\x1b[0m) in https.get(${url}): \x1b[1;33m|\x1b[0m` + msg + '\x1b[1;33m|\x1b[0m')
     }))
 }
 
@@ -106,7 +123,7 @@ function question(settingEntry, it, settingsToUse, stats) {
         go(settingsToUse, stats)
         return
     }
-    rl.question(`${settingEntry.value[1].message} [\x1b[1;33m${settingEntry.value[1].v}\x1b[0m] `, answer => {
+    rl.question(`${settingEntry.value[1].message} [\x1b[1;32m${settingEntry.value[1].v}\x1b[0m] `, answer => {
         if (answer) {
             try {
                 settingsToUse[settingEntry.value[0]].v = settingsToUse[settingEntry.value[0]].f(answer)
@@ -131,6 +148,17 @@ function rmDirIfExistsSync(pathSepEnded) {
         })
         fs.rmdirSync(pathSepEnded)
     }
+}
+
+function mkDirRecursiveSync(pathSepEnded) {
+    const segments = pathSepEnded.split(SEP)
+    segments.pop()
+    pathSepEnded = ''
+    segments.forEach(it => {
+        if (!fs.existsSync(pathSepEnded += it + SEP)) {
+            fs.mkdirSync(pathSepEnded)
+        }
+    })
 }
 
 function completer(line) {
