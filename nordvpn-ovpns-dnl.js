@@ -26,7 +26,7 @@ settingsToUse[BATCH_SIZE_KEY] = {
 }
 settingsToUse[DIR_KEY] = {
     v: os.homedir() + (os.platform() === 'win32' ? '\\Desktop\\' : SEP) + 'ovpns' + SEP, message: 'Download to folder:', f: v => {
-        if (!(v = v.trim())) {
+        if (!(v = v.trim().replace(/["'`]/g, ''))) {
             throw Error
         }
         return v + (v.endsWith(SEP) ? '' : SEP)

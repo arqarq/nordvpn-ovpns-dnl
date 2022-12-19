@@ -10,9 +10,9 @@ const INPUT_COLOR = '\x1b[1;32m', DNL_SITE_KEY = 'dnl_site', BATCH_SIZE_KEY = 'b
 function go(settingsToUse, stats) {
     console.time('...done')
     console.log('\x1b[0mstarted...')
-    rmDirIfExistsSync(settingsToUse[DIR_KEY].v, false)
-    mkDirRecursiveSync(settingsToUse[DIR_KEY].v)
     try {
+        rmDirIfExistsSync(settingsToUse[DIR_KEY].v, false)
+        mkDirRecursiveSync(settingsToUse[DIR_KEY].v)
         https.get(settingsToUse[DNL_SITE_KEY].v, res => {
             let a = ''
 
