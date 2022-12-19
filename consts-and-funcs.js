@@ -4,12 +4,13 @@ const SEP = require('path').sep
 const PLATFORM = require('os').platform()
 const rl = require('readline').createInterface({input: process.stdin, output: process.stdout, completer})
 
-const DNL_SITE_KEY = 'dnl_site', BATCH_SIZE_KEY = 'batch_size', DIR_KEY = 'dir', FIXES_ENABLE_KEY = 'fixes_enable'
+const INPUT_COLOR = '\x1b[1;32m', DNL_SITE_KEY = 'dnl_site', BATCH_SIZE_KEY = 'batch_size', DIR_KEY = 'dir',
+    FIXES_ENABLE_KEY = 'fixes_enable', COUNTRIES_KEY = 'langs', UNATTENDED_KEY = 'unattended'
 
 function go(settingsToUse, stats) {
     console.time('...done')
-    console.log('started...')
-    rmDirIfExistsSync(settingsToUse[DIR_KEY].v)
+    console.log('\x1b[0mstarted...')
+    rmDirIfExistsSync(settingsToUse[DIR_KEY].v, false)
     mkDirRecursiveSync(settingsToUse[DIR_KEY].v)
     try {
         https.get(settingsToUse[DNL_SITE_KEY].v, res => {
@@ -27,19 +28,23 @@ function go(settingsToUse, stats) {
                     }
                     urlsParts.push(urls.slice(i))
                     for (const urlsPart of urlsParts) {
-                        await Promise.all(urlsPart.map(async it => {
+                        i = await Promise.all(urlsPart.map(async it => {
                             const strings = it.split('/')
                             try {
-                                await downloadOvpnFile(it, settingsToUse[DIR_KEY].v, strings[strings.length - 1], settingsToUse, stats)
+                                return await downloadOvpnFile(it, settingsToUse[DIR_KEY].v, strings[strings.length - 1], settingsToUse,
+                                    stats)
                             } catch (e) {
                                 console.error(e)
                             }
                         }))
-                        console.log('batch\x1b[1;32m', settingsToUse[BATCH_SIZE_KEY].v + '\x1b[0m')
+                        if (i = i.filter(it => it).length) {
+                            console.log('batch\x1b[1;32m ' + i + '\x1b[0m')
+                        }
                     }
                 }
                 console.timeEnd('...done')
-                console.log(`ok: \x1b[1;32m${stats.success}\x1b[0m, err: \x1b[1;33m${stats.failed}\x1b[0m, total: ${stats.total}`)
+                console.log(`ok: \x1b[1;32m${stats.success}\x1b[0m, err: \x1b[1;33m${stats.failed}\x1b[0m, total: ` +
+                    `\x1b[1;37m${stats.total}\x1b[0m`)
             })
         }).on('error', e => console.error('access to vpn site error:', e.message))
     } catch (e) {
@@ -63,19 +68,17 @@ function modify(a) {
 
 function parseSettings(fileData) {
     const settingsMap = {}
-    const settingsKeys = [DNL_SITE_KEY, BATCH_SIZE_KEY, DIR_KEY, FIXES_ENABLE_KEY]
+    const settingsKeys = [DNL_SITE_KEY, BATCH_SIZE_KEY, DIR_KEY, FIXES_ENABLE_KEY, COUNTRIES_KEY, UNATTENDED_KEY]
 
     fileData.split(fileData.includes('\r\n') ? '\r\n' : fileData.includes('\n') ? '\n' : '\r').map(it => it.split('='))
         .filter(it => it.length === 2)
-        .map(it => [it[0].trim().toLowerCase(), it[1].trim()])
-        .filter(it => it[1].length)
+        .map(it => [it[0].trim().toLowerCase(), it[1]])
         .filter(it => settingsKeys.includes(it[0]))
         .forEach(it => settingsMap[it[0]] = it[1])
     return settingsMap
 }
 
-function appendCountryFolder(path, fileName) {
-    const country = fileName.match(/^\D+/g)[0]
+function appendCountryFolder(path, fileName, country) {
     const split = country.split('-')
     if (!fs.existsSync(path += split[0])) {
         fs.mkdirSync(path)
@@ -90,7 +93,12 @@ function appendCountryFolder(path, fileName) {
 
 function downloadOvpnFile(url, path, file, settingsToUse, stats) {
     return new Promise((resolve, reject) => {
-        const writeStream = fs.createWriteStream(file = appendCountryFolder(path, file))
+        const country = file.match(/^\D+/g)[0]
+        if (!settingsToUse[COUNTRIES_KEY].v.some(it => country.startsWith(it))) {
+            resolve()
+            return
+        }
+        const writeStream = fs.createWriteStream(file = appendCountryFolder(path, file, country))
         https.get(url, res => {
             let a = ''
 
@@ -100,7 +108,7 @@ function downloadOvpnFile(url, path, file, settingsToUse, stats) {
                     writeStream.end(settingsToUse[FIXES_ENABLE_KEY].v ? modify(a) : a, () => {
                         stats.total++
                         stats.success++
-                        resolve()
+                        resolve(true)
                     })
                 } catch (e) {
                     closeRemoveAndRejectWithMessage(writeStream, file, e.message, url, reject, stats)
@@ -113,40 +121,50 @@ function downloadOvpnFile(url, path, file, settingsToUse, stats) {
 function closeRemoveAndRejectWithMessage(writeStream, file, msg, url, rejectFn, stats) {
     writeStream.close(() => fs.unlink(file, () => {
         stats.total++
-        rejectFn(`error (\x1b[1;33m${++stats.failed}\x1b[0m) in https.get(${url}): \x1b[1;33m|\x1b[0m` + msg + '\x1b[1;33m|\x1b[0m')
+        rejectFn(`error \x1b[1;33m${++stats.failed}\x1b[0m in https.get(${url}): \x1b[1;33m|\x1b[0m` + msg + '\x1b[1;33m|\x1b[0m')
     }))
 }
 
-function question(settingEntry, it, settingsToUse, stats) {
+function question(settingEntry, it, settingsToUse, stats, unattended) {
     if (settingEntry.done) {
         rl.close()
         go(settingsToUse, stats)
         return
     }
-    rl.question(`${settingEntry.value[1].message} [\x1b[1;32m${settingEntry.value[1].v}\x1b[0m] `, answer => {
-        if (answer) {
-            try {
-                settingsToUse[settingEntry.value[0]].v = settingsToUse[settingEntry.value[0]].f(answer)
-            } catch (e) {
-                question(settingEntry, it, settingsToUse, stats)
-                return
-            }
+    if (!settingEntry.value[1].message) {
+        question(it.next(), it, settingsToUse, stats, unattended)
+        return
+    }
+    if (unattended) {
+        rl.write(`\x1b[0m${settingEntry.value[1].message} ${INPUT_COLOR}${settingEntry.value[1].v}\n`)
+        question(it.next(), it, settingsToUse, stats, true)
+        return
+    }
+    rl.question(`\x1b[0m${settingEntry.value[1].message} ${INPUT_COLOR}`, answer => {
+        try {
+            settingsToUse[settingEntry.value[0]].v = settingsToUse[settingEntry.value[0]].f(answer)
+        } catch (e) {
+            question(settingEntry, it, settingsToUse, stats, false)
+            return
         }
-        question(it.next(), it, settingsToUse, stats)
+        question(it.next(), it, settingsToUse, stats, false)
     })
+    rl.write(settingEntry.value[1].v + '')
 }
 
-function rmDirIfExistsSync(pathSepEnded) {
+function rmDirIfExistsSync(pathSepEnded, delLeftoverEmptyDir) {
     if (fs.existsSync(pathSepEnded)) {
         fs.readdirSync(pathSepEnded).forEach(fileName => {
             fileName = pathSepEnded + fileName
             if (fs.statSync(fileName).isDirectory()) {
-                rmDirIfExistsSync(fileName + SEP)
+                rmDirIfExistsSync(fileName + SEP, true)
                 return
             }
             fs.unlinkSync(fileName)
         })
-        fs.rmdirSync(pathSepEnded)
+        if (delLeftoverEmptyDir) {
+            fs.rmdirSync(pathSepEnded)
+        }
     }
 }
 
@@ -162,17 +180,18 @@ function mkDirRecursiveSync(pathSepEnded) {
 }
 
 function completer(line) {
-    const lineLC = line.toLowerCase()
-    const hits = ['true', 'false'].filter(c => line.length && c.startsWith(lineLC))
+    const hits = [], lineLC = line.toLowerCase(), lL = line.length
     if (lineLC === 'y' || lineLC === '1') {
         hits.push('true')
     } else if (lineLC === 'n' || lineLC === '0') {
         hits.push('false')
+    } else {
+        hits.push(...['true', 'false'].filter(c => lL && c.startsWith(lineLC)))
     }
     if (hits.length) {
-        rl.line = line.toLowerCase()
+        rl.line = hits[0].substring(0, lL)
     }
-    return [hits, line]
+    return [hits.length && hits[0].length === lL ? [] : hits, line]
 }
 
-module.exports = {DNL_SITE_KEY, BATCH_SIZE_KEY, DIR_KEY, FIXES_ENABLE_KEY, parseSettings, question}
+module.exports = {DNL_SITE_KEY, BATCH_SIZE_KEY, DIR_KEY, FIXES_ENABLE_KEY, COUNTRIES_KEY, UNATTENDED_KEY, parseSettings, question}
