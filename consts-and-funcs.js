@@ -28,22 +28,24 @@ function go(settingsToUse, stats) {
                     }
                     urlsParts.push(urls.slice(i))
                     for (const urlsPart of urlsParts) {
+                        u = false
                         i = await Promise.all(urlsPart.map(async it => {
                             const strings = it.split('/')
                             try {
                                 return await downloadOvpnFile(it, settingsToUse[DIR_KEY].v, strings[strings.length - 1], settingsToUse,
                                     stats)
                             } catch (e) {
+                                u = true
                                 console.error(e)
                             }
                         }))
                         if (i = i.filter(it => it).length) {
-                            console.log('batch\x1b[1;32m ' + i + '\x1b[0m')
+                            console.log((u ? 'batch\x1b[1;33m' : 'batch\x1b[1;32m') + ` ${i}\x1b[0m`)
                         }
                     }
                 }
                 console.timeEnd('...done')
-                console.log(`ok: \x1b[1;32m${stats.success}\x1b[0m, err: \x1b[1;33m${stats.failed}\x1b[0m, total: ` +
+                console.log(`ok: \x1b[1;32m${stats.success}\x1b[0m, err: \x1b[1;31m${stats.failed}\x1b[0m, total: ` +
                     `\x1b[1;37m${stats.total}\x1b[0m`)
             })
         }).on('error', e => console.error('access to vpn site error:', e.message))
@@ -63,7 +65,7 @@ function modify(a) {
     if (l !== a.length) {
         return a
     }
-    throw Error('file content n/g:\n' + a + '\n----- EOF -----')
+    throw Error('file content n/g:\n' + a + '----- EOF -----')
 }
 
 function parseSettings(fileData) {
@@ -121,7 +123,7 @@ function downloadOvpnFile(url, path, file, settingsToUse, stats) {
 function closeRemoveAndRejectWithMessage(writeStream, file, msg, url, rejectFn, stats) {
     writeStream.close(() => fs.unlink(file, () => {
         stats.total++
-        rejectFn(`error \x1b[1;33m${++stats.failed}\x1b[0m in https.get(${url}): \x1b[1;33m|\x1b[0m` + msg + '\x1b[1;33m|\x1b[0m')
+        rejectFn(`error \x1b[1;31m${++stats.failed}\x1b[0m in https.get(${url}): \x1b[1;33m|\x1b[0m` + msg + '\x1b[1;33m|\x1b[0m')
     }))
 }
 
